@@ -172,6 +172,78 @@ describe('Страница бронирования: выбор времени',
     expect(continueButton).toBeEnabled();
   });
 
+  it('should show free count of open day in card even when no slot is chosen', async () => {
+    // given
+    mockBookingPage();
+
+    // when
+    renderApp('/book/call-30');
+
+    // then
+    await screen.findByRole('region', { name: 'Слоты дня' });
+    expect(within(summaryCard()).getByText('Свободно: 2')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '25 ноября, свободных слотов: 2' }),
+    ).toHaveTextContent('2');
+    expect(within(summaryCard()).queryByText('Выберите день и время')).not.toBeInTheDocument();
+  });
+
+  it('should change free count when another day is clicked in calendar', async () => {
+    // given
+    mockBookingPage();
+    const user = userEvent.setup();
+    renderApp('/book/call-30');
+
+    // when
+    await user.click(await screen.findByRole('button', { name: '30 ноября, свободных слотов: 1' }));
+
+    // then
+    expect(within(summaryCard()).getByText('Свободно: 1')).toBeInTheDocument();
+  });
+
+  it('should show zero free count when day has no free slots', async () => {
+    // given
+    mockBookingPage();
+    const user = userEvent.setup();
+    renderApp('/book/call-30');
+
+    // when
+    await user.click(await screen.findByRole('button', { name: '24 ноября, свободных слотов: 0' }));
+
+    // then
+    expect(within(summaryCard()).getByText('Свободно: 0')).toBeInTheDocument();
+  });
+
+  it('should count open day instead of chosen slot day when another day is opened', async () => {
+    // given
+    mockBookingPage();
+    const user = userEvent.setup();
+    renderApp('/book/call-30');
+    const column = await screen.findByRole('region', { name: 'Слоты дня' });
+    await user.click(within(column).getByRole('button', { name: '10:00–10:30 Свободно' }));
+
+    // when
+    await user.click(screen.getByRole('button', { name: '30 ноября, свободных слотов: 1' }));
+
+    // then
+    expect(within(summaryCard()).getByText('Свободно: 1')).toBeInTheDocument();
+    expect(within(summaryCard()).getByText('среда, 25 ноября')).toBeInTheDocument();
+  });
+
+  it('should not show free count on guest details step', async () => {
+    // given
+    mockBookingPage();
+    const user = userEvent.setup();
+    renderApp('/book/call-30');
+
+    // when
+    await openGuestForm(user);
+
+    // then
+    expect(guestField('Имя')).toBeInTheDocument();
+    expect(screen.queryByText(/Свободно: /)).not.toBeInTheDocument();
+  });
+
   it('should lead back to catalog when back is clicked', async () => {
     // given
     mockBookingPage();
@@ -284,6 +356,7 @@ describe('Страница бронирования: данные гостя и 
     server.use(mockApi('bookingsCreate', 409, SLOT_TAKEN));
     const user = userEvent.setup();
     renderApp('/book/call-30');
+    expect(await screen.findByText('Свободно: 2')).toBeInTheDocument();
     await openGuestForm(user);
     await fillGuestForm(user);
     // Пока гость заполнял форму, 10:00–10:30 заняли: после конфликта сервер отдаст его занятым
@@ -309,6 +382,7 @@ describe('Страница бронирования: данные гостя и 
       await within(column).findByRole('button', { name: '10:00–10:30 Занято' }),
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Продолжить' })).toBeDisabled();
+    expect(within(summaryCard()).getByText('Свободно: 1')).toBeInTheDocument();
 
     await user.click(within(column).getByRole('button', { name: '09:00–09:30 Свободно' }));
     await user.click(screen.getByRole('button', { name: 'Продолжить' }));

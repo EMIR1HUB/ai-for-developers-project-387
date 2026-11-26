@@ -59,16 +59,21 @@ async function firstFreeSlot(request: APIRequestContext, eventTypeId: string): P
   return slot;
 }
 
-/** Выбор дня и слота на шаге «выбор времени» */
-async function chooseSlot(page: Page, slot: Slot): Promise<void> {
-  await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
-  // По умолчанию открыт первый день со свободными слотами; нужный день может быть следующим,
-  // в том числе в следующем месяце
+/** Открывает в календаре день слота: нужный день может быть в следующем месяце */
+async function openDay(page: Page, slot: Slot): Promise<void> {
   const day = page.getByRole('button', { name: new RegExp(`^${dayLabel(slot.start)},`) });
   if (!(await day.isVisible())) {
     await page.getByRole('button', { name: 'Следующий месяц' }).click();
   }
   await day.click();
+}
+
+/** Выбор дня и слота на шаге «выбор времени» */
+async function chooseSlot(page: Page, slot: Slot): Promise<void> {
+  await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
+  // По умолчанию открыт первый день со свободными слотами; нужный день может быть следующим,
+  // в том числе в следующем месяце
+  await openDay(page, slot);
   await page.getByRole('button', { name: `${timeRange(slot)} Свободно`, exact: true }).click();
   await page.getByRole('button', { name: 'Продолжить' }).click();
 }
@@ -170,6 +175,61 @@ test('should keep guest details and show conflict when chosen slot is taken via 
   await expect(
     page.getByRole('button', { name: `${timeRange(slot)} Занято`, exact: true }),
   ).toBeDisabled();
+
+  const nextSlot = await firstFreeSlot(request, eventType.id);
+  await chooseSlot(page, nextSlot);
+  await expect(page.getByRole('textbox', { name: 'Имя' })).toHaveValue(guest.name);
+  await expect(page.getByRole('textbox', { name: 'Email' })).toHaveValue(guest.email);
+  await expect(page.getByRole('textbox', { name: 'Заметка' })).toHaveValue(guest.note);
+});
+
+test('should decrease free count in card by one when chosen slot is taken via API meanwhile', async ({
+  page,
+  request,
+}) => {
+  // given
+  const suffix = uniqueSuffix();
+  const eventType: EventType = {
+    id: `e2e-free-${suffix}`,
+    title: `Созвон со счётчиком ${suffix}`,
+    description: '',
+    durationMinutes: 15,
+  };
+  const created = await request.post('/api/event-types', { data: eventType });
+  expect(created.status()).toBe(201);
+  const guest = { name: 'Вера Гостева', email: 'vera@example.com', note: 'Жду звонка' };
+
+  await page.goto(`/book/${eventType.id}`);
+  const slot = await firstFreeSlot(request, eventType.id);
+  const slotsOfDay = (await fetchSlots(request, eventType.id)).filter(
+    (candidate) => candidate.start.slice(0, 10) === slot.start.slice(0, 10),
+  );
+  const freeBefore = slotsOfDay.filter((candidate) => candidate.available).length;
+  const card = page.getByRole('region', { name: 'Тип встречи' });
+  await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
+  await openDay(page, slot);
+  await expect(card.getByText(`Свободно: ${freeBefore}`)).toBeVisible();
+  await chooseSlot(page, slot);
+  // chooseSlot довела до формы: к выбору времени гость вернётся после отказа
+  await page.getByRole('textbox', { name: 'Имя' }).fill(guest.name);
+  await page.getByRole('textbox', { name: 'Email' }).fill(guest.email);
+  await page.getByRole('textbox', { name: 'Заметка' }).fill(guest.note);
+
+  const rival: NewBooking = {
+    eventTypeId: eventType.id,
+    start: slot.start,
+    guestName: 'Соперник',
+    guestEmail: 'rival@example.com',
+  };
+  const rivalBooking = await request.post('/api/bookings', { data: rival });
+  expect(rivalBooking.status()).toBe(201);
+
+  // when
+  await page.getByRole('button', { name: 'Забронировать' }).click();
+
+  // then
+  await expect(page.getByText('Это время уже заняли. Выберите другой слот')).toBeVisible();
+  await expect(card.getByText(`Свободно: ${freeBefore - 1}`)).toBeVisible();
 
   const nextSlot = await firstFreeSlot(request, eventType.id);
   await chooseSlot(page, nextSlot);
