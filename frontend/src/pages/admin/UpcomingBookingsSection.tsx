@@ -1,4 +1,4 @@
-import { Skeleton, Stack, Table, Text, Title } from '@mantine/core';
+import { Group, Skeleton, Stack, Table, Text, Title } from '@mantine/core';
 import { useId } from 'react';
 import { bookingsList, ownerGet } from '../../api/generated/sdk.gen';
 import type { Booking } from '../../api/generated/types.gen';
@@ -65,9 +65,15 @@ export function UpcomingBookingsSection() {
 
   return (
     <section aria-labelledby={headingId}>
-      <Title order={2} id={headingId} mb="md">
-        Предстоящие бронирования
-      </Title>
+      <Group align="baseline" gap="sm" mb="md">
+        <Title order={2} id={headingId}>
+          Предстоящие бронирования
+        </Title>
+        {/* Вне заголовка: имя региона остаётся названием раздела; число идёт следом в порядке чтения */}
+        {upcoming.status === 'success' && upcoming.data.bookings.length > 0 && (
+          <Text c="dimmed">{`Всего: ${upcoming.data.bookings.length}`}</Text>
+        )}
+      </Group>
       {upcoming.status === 'loading' && (
         <Stack gap="xs" role="status" aria-label="Загрузка бронирований">
           {Array.from({ length: SKELETON_ROWS }, (_, index) => (
