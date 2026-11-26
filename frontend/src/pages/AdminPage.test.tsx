@@ -324,6 +324,7 @@ describe('Админка: предстоящие бронирования', () =
     renderApp('/admin');
     const alert = await within(upcomingSection()).findByRole('alert');
     expect(within(alert).getByText('Не удалось связаться с сервером')).toBeInTheDocument();
+    expect(within(upcomingSection()).queryByText(/Всего:/)).not.toBeInTheDocument();
 
     // when
     server.use(mockApi('bookingsList', 200, UPCOMING));
@@ -332,6 +333,7 @@ describe('Админка: предстоящие бронирования', () =
     // then
     const table = await within(upcomingSection()).findByRole('table');
     expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(within(upcomingSection()).getByText('Всего: 2')).toBeInTheDocument();
     expect(within(upcomingSection()).queryByRole('alert')).not.toBeInTheDocument();
   });
 
