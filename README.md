@@ -236,6 +236,8 @@ Render MCP (ниже) не умеет создавать сервис в Docker-
 
 **Разовая настройка владельцем.** Без неё `GITHUB_TOKEN` не может создать PR и workflow упадёт: Settings → Actions → General → Workflow permissions → включить «Allow GitHub Actions to create and approve pull requests».
 
+**Обязательный CI на `main`.** Ветка защищена: PR вливается только при зелёной проверке `check` (линтеры, типы, тесты и браузерные сценарии из `ci.yml`), настройка в Settings → Branches. Для администраторов защита не обязательна (`enforce_admins: false`) намеренно: на релизном PR CI не запускается (см. выше), и владелец вливает его в обход проверки, предварительно убедившись, что CI зелёный на `main`. Остальные PR владелец тоже вливает только после зелёного `check`.
+
 ---
 
 <details>
