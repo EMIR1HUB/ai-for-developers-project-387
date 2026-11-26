@@ -1,0 +1,167 @@
+name: review
+
+# Независимое авторевью PR: отдельный запуск Claude Code CLI, не связанный с сессией реализации, читает
+# описание PR, спецификацию и согласование по ссылкам, diff и результаты CI по критериям REVIEW.md.
+# Код не меняет, исправление запускает только человек командой @claude (claude.yml).
+# Описание: README.md, раздел «Агент в GitHub»
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Новый push в PR отменяет ревью устаревшей версии
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Только ветки этого репозитория: PR из fork не получают секрет модели. Автор — доверенный участник или
+    # бот Claude App по точному логину, чтобы PR агента тоже получали ревью, а другие боты — нет.
+    # Черновики не ревьюим: implement-spec открывает draft и помечает его готовым после своего ревью
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) ||
+      github.event.pull_request.user.login == 'claude[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Только чтение, без OIDC. Записи в PR у задания с моделью нет: комментарий публикует задание publish
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+      pull-requests: read
+    steps:
+      # Версия автора, а не временный merge-коммит
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # Контекст собирает шаг без модели: у ревьюера нет оболочки и токена GitHub
+      - name: Collect review context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Критерии — из того же коммита базы, на который ссылается подпись ревью
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          ctx=.review-context
+          # Папка контекста создаётся только этим шагом: файлы с тем же путём из ветки PR могли бы
+          # подменить обращение или согласование, поэтому такой PR не ревьюится
+          if git ls-files --error-unmatch "$ctx" > /dev/null 2>&1; then
+            echo "::error::PR содержит файлы в ${ctx}/, авторевью не запускается"
+            exit 1
+          fi
+          rm -rf "$ctx"
+          mkdir -p "$ctx"
+          # Критерии ревью и правила проекта — из базовой ветки: PR не может ослабить то, чем его проверяют
+          # Только если файла в базовой ветке нет (404: его вводит сам PR), ревьюер получает версию из PR
+          # с пометкой. Любая другая ошибка API останавливает ревью, а не подменяет критерии молча
+          for f in REVIEW.md AGENTS.md; do
+            out="$ctx/${f%.md}.base.md"
+            if content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_SHA}" --jq .content 2> "$RUNNER_TEMP/api-error"); then
+              base64 -d <<< "$content" > "$out"
+            elif grep -q 'HTTP 404' "$RUNNER_TEMP/api-error"; then
+              { echo "> ${f} нет в базовой ветке ${BASE_REF}: ниже версия из этого PR, отметь это в ревью."; echo; cat "$f"; } > "$out"
+            else
+              cat "$RUNNER_TEMP/api-error"
+              exit 1
+            fi
+          done
+          gh pr view "$PR_NUMBER" --json number,title,author,headRefOid,baseRefName,url > "$ctx/pr.json"
+          gh pr view "$PR_NUMBER" --json body --jq .body > "$ctx/pr-body.md"
+          gh pr view "$PR_NUMBER" --comments > "$ctx/pr-discussion.md"
+          gh pr diff "$PR_NUMBER" > "$ctx/diff.patch"
+          # Результат CI на момент ревью: проверки идут параллельно, часть может быть ещё в работе
+          gh pr checks "$PR_NUMBER" > "$ctx/checks.txt" 2>&1 || true
+          # Обращение, спецификация, тикеты и согласование — по ссылкам из описания PR. Полные ссылки
+          # (owner/repo#N, github.com/owner/repo/issues/N) берутся из своего репозитория, голый #N — из этого
+          refs=$(
+            {
+              grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#|/issues/|/pull/)[0-9]+' "$ctx/pr-body.md" \
+                | sed -E 's#^([^/]+)/([^/\#]+)(\#|/issues/|/pull/)([0-9]+)$#\1/\2 \4#' || true
+              grep -oE '(^|[^A-Za-z0-9_./-])#[0-9]+' "$ctx/pr-body.md" | grep -oE '[0-9]+' \
+                | sed "s#^#${GITHUB_REPOSITORY} #" || true
+            } | sort -u | head -n 15
+          )
+          while read -r repo n; do
+            [ -n "$repo" ] || continue
+            file="$ctx/issue-${repo//\//_}-${n}.md"
+            gh issue view "$n" --repo "$repo" --comments > "$file" 2>/dev/null \
+              || echo "${repo}#${n} недоступно по ссылке из описания PR" > "$file"
+          done <<< "$refs"
+          ls -l "$ctx"
+
+      - name: Install Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.332
+
+      # --restricted: без инструментов, запускающих команды, без проектных файлов настроек и хуков
+      # из ветки PR, файловые инструменты только в рабочей папке. --strict-mcp-config: без .mcp.json из PR.
+      # Модель другая, чем у разработчика (claude.yml)
+      - name: Review
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          prompt="Ты независимый ревьюер PR #${PR_NUMBER} этого репозитория, версия ${HEAD_SHA}.
+          Сначала прочитай .review-context/REVIEW.base.md: это критерии и формат ревью из базовой ветки, следуй им.
+          Правила проекта — в .review-context/AGENTS.base.md. Если PR меняет REVIEW.md или AGENTS.md, проверяй
+          по версии из базовой ветки и отдельно отметь это изменение.
+          Контекст PR собран в папке .review-context: pr.json и pr-body.md (описание), pr-discussion.md
+          (обсуждение и прежние ревью), diff.patch, checks.txt (CI на момент ревью) и issue-<owner>_<repo>-N.md
+          (обращение, спецификация, тикеты и согласование по ссылкам из описания). Код смотри в рабочей папке.
+          Ответ — только текст ревью в формате REVIEW.md, на русском."
+          claude -p "$prompt" \
+            --model claude-opus-5-5 \
+            --restricted \
+            --strict-mcp-config \
+            --tools "Read,Grep,Glob" \
+            --permission-mode dontAsk \
+            --allowedTools "Read,Grep,Glob" \
+            --output-format text > "$RUNNER_TEMP/review.md"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: review-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/review.md
+          retention-days: 14
+
+  # Публикует отдельное задание без модели и без кода PR. Комментарий от github-actions[bot] не запускает
+  # агента: claude.yml пропускает комментарии ботов
+  publish:
+    needs: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: review-${{ github.event.pull_request.head.sha }}
+          path: review
+
+      - name: Publish review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Критерии ревью берутся из базовой ветки, ссылка ведёт на ту же версию
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Авторевью"
+            echo
+            echo "Проверенная версия: \`${HEAD_SHA}\` · модель \`claude-opus-5-5\` · критерии [REVIEW.md из базовой ветки](../blob/${BASE_SHA}/REVIEW.md) · [лог прогона](${RUN_URL})"
+            echo
+            echo "Ревью только оставляет замечания. Исправление запускает человек командой \`@claude\` в PR."
+            echo
+            cat review/review.md
+          } > comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file comment.md
