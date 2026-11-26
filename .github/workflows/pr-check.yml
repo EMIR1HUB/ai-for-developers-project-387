@@ -1,0 +1,77 @@
+name: pr-check
+
+# Браузерная проверка работающей версии PR: приложение запускается из точного head SHA автора
+# (не из временного merge-коммита), Playwright проходит сценарии из e2e/ с включённым trace.
+# Артефакт хранит trace, отчёт и файл с SHA и результатом. Секрет модели не нужен.
+# Описание: README.md, раздел «Агент в GitHub»
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Новый push в PR отменяет проверку устаревшей версии
+    concurrency:
+      group: pr-check-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # Фактически проверенный коммит, а не ожидаемый: он попадает в артефакт
+      - name: Record checked SHA
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: jdx/mise-action@v5
+      - run: mise run install
+      - run: npx playwright install --with-deps chromium
+      - run: mise run generate
+      - run: npm run build -w @calendar/frontend
+
+      # Trace пишется и для успешных сценариев: по нему видно, что проверено
+      - name: Browser scenarios
+        id: e2e
+        run: npm run e2e -w @calendar/e2e -- --trace on
+
+      - name: Write verification
+        if: always() && steps.sha.outputs.sha != ''
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          CHECKED_SHA: ${{ steps.sha.outputs.sha }}
+          RESULT: ${{ steps.e2e.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "pr: #${PR_NUMBER}"
+            echo "head_sha: ${EXPECTED_SHA}"
+            echo "checked_sha (git rev-parse HEAD): ${CHECKED_SHA}"
+            echo "result: ${RESULT}"
+            echo "run: ${RUN_URL}"
+            echo "checked_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee e2e/verification.txt
+          {
+            echo "### Браузерная проверка PR #${PR_NUMBER}"
+            echo
+            echo "- Проверенный SHA: \`${CHECKED_SHA}\`"
+            echo "- Результат: **${RESULT}**"
+            echo "- Артефакт: \`pr-e2e-${CHECKED_SHA}\` (trace, отчёт Playwright, verification.txt)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload browser artifact
+        if: always() && steps.sha.outputs.sha != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-e2e-${{ steps.sha.outputs.sha }}
+          path: |
+            e2e/verification.txt
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14

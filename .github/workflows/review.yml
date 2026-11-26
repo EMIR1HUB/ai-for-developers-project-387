@@ -1,0 +1,89 @@
+name: review
+
+# Независимое авторевью PR: отдельный запуск Claude Code CLI, не связанный с сессией реализации, читает
+# diff, спецификацию, согласование и результаты CI по критериям REVIEW.md и оставляет комментарий.
+# Код не меняет, исправление запускает только человек командой @claude (claude.yml).
+# Описание: README.md, раздел «Агент в GitHub»
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  review:
+    # Только ветки этого репозитория: PR из fork не получают секрет модели. Автор — доверенный участник или
+    # бот Claude App по точному логину, чтобы PR агента тоже получали ревью, а другие боты — нет.
+    # Черновики не ревьюим: implement-spec открывает draft и помечает его готовым после своего ревью
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) ||
+      github.event.pull_request.user.login == 'claude[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Новый push в PR отменяет ревью устаревшей версии
+    concurrency:
+      group: review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    # Обычный GITHUB_TOKEN без обмена OIDC: чтение кода, issue со спецификацией и согласованием,
+    # результатов CI и запись одного комментария в PR
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+      pull-requests: write
+    steps:
+      # Версия автора, а не временный merge-коммит
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.332
+
+      # Ревьюер только читает: режим dontAsk отклоняет всё, что не разрешено в --allowedTools,
+      # правка файлов и команды, меняющие PR, запрещены. Модель другая, чем у разработчика (claude.yml).
+      # Заголовок и текст PR в запрос не подставляются: ревьюер читает их сам через gh
+      - name: Review
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          prompt="Ты независимый ревьюер PR #${PR_NUMBER} этого репозитория (версия ${HEAD_SHA}, база origin/${BASE_REF}).
+          Сначала прочитай REVIEW.md: это критерии и формат ревью, следуй им. Правила проекта — в AGENTS.md.
+          Прочитай описание PR (gh pr view ${PR_NUMBER}), по ссылкам в нём исходное обращение, спецификацию,
+          тикеты и комментарий согласования (gh issue view N --comments), diff (gh pr diff ${PR_NUMBER})
+          и результаты CI (gh pr checks ${PR_NUMBER}). Код ты не меняешь и команды не запускаешь,
+          кроме разрешённых на чтение. Ответ — только текст ревью в формате REVIEW.md, на русском."
+          claude -p "$prompt" \
+            --model claude-opus-5-5 \
+            --permission-mode dontAsk \
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),Bash(gh issue view:*),Bash(gh run list:*),Bash(gh run view:*),Bash(git log:*),Bash(git diff:*),Bash(git show:*)" \
+            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch" \
+            --output-format text > "$RUNNER_TEMP/review.md"
+
+      # Публикует отдельный шаг без модели. Комментарий от github-actions[bot] не запускает агента:
+      # claude.yml пропускает комментарии ботов
+      - name: Publish review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "## Авторевью"
+            echo
+            echo "Проверенная версия: \`${HEAD_SHA}\` · модель \`claude-opus-5-5\` · критерии [REVIEW.md](../blob/${HEAD_SHA}/REVIEW.md) · [лог прогона](${RUN_URL})"
+            echo
+            echo "Ревью только оставляет замечания. Исправление запускает человек командой \`@claude\` в PR."
+            echo
+            cat "$RUNNER_TEMP/review.md"
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md"
