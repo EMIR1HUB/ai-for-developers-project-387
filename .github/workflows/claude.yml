@@ -1,0 +1,54 @@
+name: claude
+
+# Агент Claude Code по команде в комментарии: отвечает в обсуждении issue или PR, правит ветку PR.
+# Описание, модель и как остановить: README.md, раздел «Агент в GitHub»
+on:
+  # Обсуждение issue или pull request
+  issue_comment:
+    types: [created]
+  # Комментарий к строке diff в pull request
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  claude:
+    # Модель вызывается только по команде @claude от владельца или участника с доступом к репозиторию.
+    # Комментарии ботов, в том числе ответы самого агента, пропускаются. Правка комментария не запускает
+    # агента повторно: события только created
+    if: >-
+      contains(github.event.comment.body, '@claude') &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Один прогон агента на issue или PR: следующая команда ждёт в очереди, а не прерывает текущую работу
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    # Стандартная авторизация через Claude GitHub App: action обменивает OIDC-токен на токен приложения,
+    # и комментарии, push и вызовы gh идут с правами приложения. Самому GITHUB_TOKEN запись не нужна
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Node и инструменты из mise.toml, зависимости по lock-файлу: агент запускает тесты и линтеры, как CI
+      - uses: jdx/mise-action@v5
+      - run: mise run install
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Ключ только из секретов: токен подписки (claude setup-token) или API-ключ, задаётся один из двух
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Команда вызова (аналог mentions в OpenCode)
+          trigger_phrase: '@claude'
+          # PR из fork action пропускает по умолчанию (вход allow_fork_prs не задан, значит false):
+          # чужой код не выгружается и не получает ключ модели. Вход не пишем явно, потому что
+          # справочник actionlint о нём ещё не знает
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 60
