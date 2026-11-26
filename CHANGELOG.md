@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/EMIR1HUB/ai-for-developers-project-387/compare/v0.3.0...v0.4.0) (2026-11-26)
+
+
+### Features
+
+* строка «Свободно: N» в блоке слева на странице бронирования ([fe30598](https://github.com/EMIR1HUB/ai-for-developers-project-387/commit/fe30598d13e451595e22c3cb451ede2bdc79a3ac))
+* строка «Свободно: N» в блоке слева на странице бронирования ([249d2b6](https://github.com/EMIR1HUB/ai-for-developers-project-387/commit/249d2b602b6e9850c5af9b50b50189781474b3ca)), closes [#6](https://github.com/EMIR1HUB/ai-for-developers-project-387/issues/6) [#5](https://github.com/EMIR1HUB/ai-for-developers-project-387/issues/5)
+
 ## [0.3.0](https://github.com/EMIR1HUB/ai-for-developers-project-386/compare/v0.2.0...v0.3.0) (2026-11-25)
 
 
