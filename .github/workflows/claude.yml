@@ -13,9 +13,7 @@ on:
     types: [created]
 
 jobs:
-  # Бюджет запусков на PR проверяется кодом до вызова модели. Счётчик — история Actions этого воркфлоу
-  # (по run-name «claude #N»), которую токен агента переписать не может: у Claude App нет actions: write
-  budget:
+  claude:
     # Модель вызывается только по команде @claude от владельца или участника с доступом к репозиторию.
     # Комментарии ботов, в том числе ответы самого агента и авторевью, пропускаются. Правка комментария
     # не запускает агента повторно: события только created
@@ -24,16 +22,30 @@ jobs:
       github.event.comment.user.type != 'Bot' &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
+    # Один прогон агента на issue или PR. Пока он идёт, следующая команда ждёт в очереди; ожидать может
+    # только одна: более поздняя команда заменяет ожидающую (её задание отменяется, не начавшись).
+    # Очередь заодно делает подсчёт бюджета точным: прошлые прогоны этого PR к проверке уже завершены
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    # Стандартная авторизация через Claude GitHub App: action обменивает OIDC-токен на токен приложения,
+    # и комментарии и push идут с правами приложения. issues: write нужен скиллам to-spec и to-tickets:
+    # они публикуют спецификацию и тикеты командами gh, которым нужен GH_TOKEN (см. шаг агента).
+    # actions: read — счётчик бюджета по истории прогонов
     permissions:
+      contents: read
+      id-token: write
+      issues: write
       actions: read
     outputs:
-      allowed: ${{ steps.check.outputs.allowed }}
-      used: ${{ steps.check.outputs.used }}
-      is_pr: ${{ steps.check.outputs.is_pr }}
+      allowed: ${{ steps.budget.outputs.allowed }}
+      used: ${{ steps.budget.outputs.used }}
     steps:
+      # Бюджет запусков на PR проверяется кодом до вызова модели. Счётчик — история Actions этого воркфлоу
+      # (run-name «claude #N»), которую токен агента переписать не может: у Claude App нет actions: write
       - name: Check run budget
-        id: check
+        id: budget
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
@@ -42,28 +54,23 @@ jobs:
           LIMIT: 3
         run: |
           set -euo pipefail
-          echo "is_pr=${IS_PR}" >> "$GITHUB_OUTPUT"
           if [ "$IS_PR" != true ]; then
             # В issue бюджета нет: там идут triage, to-spec, to-tickets и implement-spec
             echo "allowed=true" >> "$GITHUB_OUTPUT"
             echo "used=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Прошлые прогоны этого PR, в которых бюджет пропустил агента: задание claude не skipped
-          # (идёт, успех, ошибка, отмена, таймаут). Каждый Re-run прогона расходует ещё одну попытку
+          # Попытка израсходована, если шаг агента начался: успех, ошибка, отмена во время работы, таймаут.
+          # Каждая попытка прогона (Re-run) считается отдельно, включая прежние попытки этого прогона.
+          # Не начавшиеся (бюджет исчерпан, команда заменена в очереди) не считаются
           used=0
-          runs=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/claude.yml/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.display_title == \"claude #${NUMBER}\" and .id != ${GITHUB_RUN_ID} and .conclusion != \"skipped\") | \"\(.id) \(.run_attempt)\"")
-          while read -r id attempts; do
-            [ -n "$id" ] || continue
-            agent=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs" \
-              --jq '[.jobs[] | select(.name == "claude" and .conclusion != "skipped")] | length')
-            if [ "$agent" -gt 0 ]; then
-              used=$((used + attempts))
-            fi
-          done <<< "$runs"
-          # Повторный запуск этого же прогона: прежние попытки тоже израсходованы
-          used=$((used + GITHUB_RUN_ATTEMPT - 1))
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/workflows/claude.yml/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.display_title == \"claude #${NUMBER}\" and .conclusion != \"skipped\") | .id")
+          for id in $ids; do
+            n=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?filter=all&per_page=100" \
+              --jq '[.jobs[] | select(.name == "claude") | .steps[] | select(.name == "Run Claude Code" and .conclusion != null and .conclusion != "skipped")] | length')
+            used=$((used + n))
+          done
           echo "used=${used}" >> "$GITHUB_OUTPUT"
           if [ "$used" -ge "$LIMIT" ]; then
             echo "allowed=false" >> "$GITHUB_OUTPUT"
@@ -73,25 +80,9 @@ jobs:
             echo "Запуск $((used + 1)) из ${LIMIT} для PR #${NUMBER}"
           fi
 
-  claude:
-    needs: budget
-    if: needs.budget.outputs.allowed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Один прогон агента на issue или PR: следующая команда ждёт в очереди, а не прерывает текущую работу
-    concurrency:
-      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
-      cancel-in-progress: false
-    # Стандартная авторизация через Claude GitHub App: action обменивает OIDC-токен на токен приложения,
-    # и комментарии и push идут с правами приложения. issues: write нужен скиллам to-spec и to-tickets:
-    # они публикуют спецификацию и тикеты командами gh, которым нужен GH_TOKEN (см. шаг агента)
-    permissions:
-      contents: read
-      id-token: write
-      issues: write
-    steps:
       # Без ключа модели запуск бессмыслен: отчёт покажет причину infra
       - name: Check model key
+        if: steps.budget.outputs.allowed == 'true'
         env:
           OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -102,14 +93,18 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
+        if: steps.budget.outputs.allowed == 'true'
         with:
           persist-credentials: false
 
       # Node и инструменты из mise.toml, зависимости по лок-файлу: агент запускает тесты и линтеры, как CI
       - uses: jdx/mise-action@v5
+        if: steps.budget.outputs.allowed == 'true'
       - run: mise run install
+        if: steps.budget.outputs.allowed == 'true'
 
       - name: Run Claude Code
+        if: steps.budget.outputs.allowed == 'true'
         # Меньше тайм-аута задания: отчёт отличит таймаут агента от остальных ошибок
         timeout-minutes: 25
         uses: anthropics/claude-code-action@v1
@@ -129,13 +124,14 @@ jobs:
             --model claude-sonnet-5-5
             --max-turns 60
 
-  # Итог без модели, когда агент не ответил сам: бюджет исчерпан или запуск сорвался. Запускается после
-  # остановки задания claude, в том числе по тайм-ауту или отмене
+  # Итог без модели в PR, когда агент не ответил сам: бюджет исчерпан или запуск сорвался. Запускается
+  # после остановки задания claude, в том числе по тайм-ауту или отмене
   report:
-    needs: [budget, claude]
+    needs: claude
     if: >-
-      always() && needs.budget.result == 'success' && needs.budget.outputs.is_pr == 'true' &&
-      (needs.budget.outputs.allowed == 'false' || needs.claude.result == 'failure' || needs.claude.result == 'cancelled')
+      always() &&
+      (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request != null) &&
+      (needs.claude.outputs.allowed == 'false' || needs.claude.result == 'failure' || needs.claude.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -146,22 +142,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
-          ALLOWED: ${{ needs.budget.outputs.allowed }}
-          USED: ${{ needs.budget.outputs.used }}
+          ALLOWED: ${{ needs.claude.outputs.allowed }}
+          USED: ${{ needs.claude.outputs.used }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          steps=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
+            --jq '.jobs[] | select(.name == "claude") | .steps[] | "\(.name)|\(.conclusion)|\(.started_at)|\(.completed_at)"')
+          if [ -z "$steps" ]; then
+            # Задание не начиналось: команду заменила в очереди более поздняя, она и ответит
+            echo "Команда заменена в очереди более поздней, отчёт не нужен"
+            exit 0
+          fi
           if [ "$ALLOWED" = false ]; then
             reason=limit_exhausted
             detail="Бюджет запусков агента на этот PR исчерпан (${USED} из 3), модель не вызывалась."
           else
-            steps=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs" \
-              --jq '.jobs[] | select(.name == "claude") | .steps[] | "\(.name)|\(.conclusion)|\(.started_at)|\(.completed_at)"')
             agent=$(grep '^Run Claude Code|' <<< "$steps" || true)
             agent_conclusion=$(cut -d'|' -f2 <<< "$agent")
             if [ -z "$agent" ] || [ "$agent_conclusion" = skipped ] || [ "$agent_conclusion" = null ]; then
               reason=infra
-              detail="Агент не стартовал: сбой подготовки (ключ модели, checkout, mise, зависимости)."
+              detail="Агент не стартовал: сбой подготовки (проверка бюджета, ключ модели, checkout, mise, зависимости)."
             else
               started=$(date -d "$(cut -d'|' -f3 <<< "$agent")" +%s)
               completed=$(date -d "$(cut -d'|' -f4 <<< "$agent")" +%s)
