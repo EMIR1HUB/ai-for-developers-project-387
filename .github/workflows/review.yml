@@ -45,10 +45,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           ctx=.review-context
+          # Папка контекста создаётся только этим шагом: файлы с тем же путём из ветки PR могли бы
+          # подменить обращение или согласование, поэтому такой PR не ревьюится
+          if git ls-files --error-unmatch "$ctx" > /dev/null 2>&1; then
+            echo "::error::PR содержит файлы в ${ctx}/, авторевью не запускается"
+            exit 1
+          fi
+          rm -rf "$ctx"
           mkdir -p "$ctx"
+          # Критерии ревью и правила проекта — из базовой ветки: PR не может ослабить то, чем его проверяют
+          gh api "repos/${GITHUB_REPOSITORY}/contents/REVIEW.md?ref=${BASE_REF}" --jq .content | base64 -d > "$ctx/REVIEW.base.md"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/AGENTS.md?ref=${BASE_REF}" --jq .content | base64 -d > "$ctx/AGENTS.base.md"
           gh pr view "$PR_NUMBER" --json number,title,author,headRefOid,baseRefName,url > "$ctx/pr.json"
           gh pr view "$PR_NUMBER" --json body --jq .body > "$ctx/pr-body.md"
           gh pr view "$PR_NUMBER" --comments > "$ctx/pr-discussion.md"
@@ -76,7 +87,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           prompt="Ты независимый ревьюер PR #${PR_NUMBER} этого репозитория, версия ${HEAD_SHA}.
-          Сначала прочитай REVIEW.md: это критерии и формат ревью, следуй им. Правила проекта — в AGENTS.md.
+          Сначала прочитай .review-context/REVIEW.base.md: это критерии и формат ревью из базовой ветки, следуй им.
+          Правила проекта — в .review-context/AGENTS.base.md. Если PR меняет REVIEW.md или AGENTS.md, проверяй
+          по версии из базовой ветки и отдельно отметь это изменение.
           Контекст PR собран в папке .review-context: pr.json и pr-body.md (описание), pr-discussion.md
           (обсуждение и прежние ревью), diff.patch, checks.txt (CI на момент ревью) и issue-N.md
           (обращение, спецификация, тикеты и согласование по ссылкам из описания). Код смотри в рабочей папке.
