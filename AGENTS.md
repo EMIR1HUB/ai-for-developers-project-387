@@ -56,6 +56,8 @@
 
 Набор [mattpocock/skills](https://github.com/mattpocock/skills) установлен в проект: `.claude/skills/`, версии в `skills-lock.json`. Вызывай скиллы по короткому имени (`/wayfinder`, `/implement-spec`), а не из глобального плагина `mattpocock-skills:*`. Обновление: `npx skills update -p`.
 
+В GitHub тот же агент запускается командой `@claude` в комментарии (`.github/workflows/claude.yml`, README.md, раздел «Агент в GitHub») и работает по этим же правилам, скиллам и командам проверок. На раннере нет человека для вопросов: недостающее решение спрашивай комментарием в issue или PR и останавливайся.
+
 ### Issue tracker
 
 Задачи и спеки ведутся в GitHub Issues репозитория через `gh`. См. `docs/agents/issue-tracker.md`.
