@@ -202,12 +202,12 @@ Render MCP (ниже) не умеет создавать сервис в Docker-
 
 **Отличие от OpenCode.** Задание описывает OpenCode (`/oc`, `opencode.json`); здесь тот же сценарий на Claude Code, которым сделан первый проект:
 
-| OpenCode                                                                                                   | Claude Code (`anthropics/claude-code-action@v1`)                                                                                                   |
-| ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| OpenCode GitHub App, команды `/opencode`, `/oc` (`mentions`)                                               | Claude GitHub App, команда `@claude` (`trigger_phrase`)                                                                                            |
-| `model: provider/model`, ключ `OPENCODE_API_KEY` и др.                                                     | `--model` в `claude_args`, ключ `CLAUDE_CODE_OAUTH_TOKEN` или `ANTHROPIC_API_KEY`                                                                  |
-| Токен приложения не попадает в оболочку: нужны `issues: write` и `GH_TOKEN: secrets.GITHUB_TOKEN` для `gh` | Action сам кладёт токен приложения в `GH_TOKEN`, поэтому `gh` в скиллах работает без прав записи у `GITHUB_TOKEN`                                  |
-| `"external_directory": "deny"`, чтобы прогон не ждал разрешения                                            | Вопросов о разрешении на раннере нет: вызов, который не разрешён и не прошёл проверку безопасности, отклоняется сразу, прогон не ждёт до тайм-аута |
+| OpenCode                                                                                                   | Claude Code (`anthropics/claude-code-action@v1`)                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenCode GitHub App, команды `/opencode`, `/oc` (`mentions`)                                               | Claude GitHub App, команда `@claude` (`trigger_phrase`)                                                                                                      |
+| `model: provider/model`, ключ `OPENCODE_API_KEY` и др.                                                     | `--model` в `claude_args`, ключ `CLAUDE_CODE_OAUTH_TOKEN` или `ANTHROPIC_API_KEY`                                                                            |
+| Токен приложения не попадает в оболочку: нужны `issues: write` и `GH_TOKEN: secrets.GITHUB_TOKEN` для `gh` | Так же: `issues: write` и `GH_TOKEN: secrets.GITHUB_TOKEN` заданы явно в `claude.yml` и `triage.yml`, хотя action и сам кладёт токен приложения в `GH_TOKEN` |
+| `"external_directory": "deny"`, чтобы прогон не ждал разрешения                                            | Вопросов о разрешении на раннере нет: вызов, который не разрешён и не прошёл проверку безопасности, отклоняется сразу, прогон не ждёт до тайм-аута           |
 
 ## Релизы
 
