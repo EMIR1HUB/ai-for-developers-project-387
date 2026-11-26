@@ -1,0 +1,55 @@
+name: triage
+
+# Предварительный разбор новых обращений: агент читает issue, проверяет, что приложение уже умеет,
+# и оставляет вопросы, когда данных не хватает. Код не меняет, решение «брать в работу» остаётся за человеком.
+# Описание, модель и где смотреть результат: README.md, раздел «Агент в GitHub»
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  triage:
+    # Только доверенные авторы и только входящие обращения. Тикеты и спецификации, которые создали to-spec
+    # и to-tickets (автор — бот Claude App, метка ready-for-agent), и обращения в любом состоянии, кроме
+    # needs-triage (метки из docs/agents/triage-labels.md), пропускаются до вызова модели
+    if: >-
+      github.event.issue.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association) &&
+      !contains(join(github.event.issue.labels.*.name, ','), 'ready-for-agent') &&
+      !contains(join(github.event.issue.labels.*.name, ','), 'ready-for-human') &&
+      !contains(join(github.event.issue.labels.*.name, ','), 'needs-info') &&
+      !contains(join(github.event.issue.labels.*.name, ','), 'wontfix')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Один разбор на обращение
+    concurrency:
+      group: triage-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # обмен OIDC-токена на токен Claude GitHub App
+      issues: write # комментарий и метки в разборе
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # Токен для gh в оболочке агента: комментарий и метки скилла triage
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # В prompt подставляется только номер: заголовок и текст обращения агент читает сам,
+          # чтобы автор не мог вписать в них инструкцию
+          prompt: |
+            Разбери новое обращение #${{ github.event.issue.number }} по скиллу triage
+            (.claude/skills/triage/SKILL.md, настройки трекера и меток в docs/agents/).
+            Проверь, что приложение уже умеет по этой теме, и задай комментарием вопросы
+            о недостающих условиях. Пока данных не хватает, оставь метку needs-triage или
+            поставь needs-info. Не ставь ready-for-agent и не закрывай обращение: это решение
+            человека. Код не меняй, to-spec и to-tickets не запускай.
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 20
+            --disallowedTools "Edit,Write,NotebookEdit"
