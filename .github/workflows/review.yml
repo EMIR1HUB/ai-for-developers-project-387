@@ -58,11 +58,17 @@ jobs:
           rm -rf "$ctx"
           mkdir -p "$ctx"
           # Критерии ревью и правила проекта — из базовой ветки: PR не может ослабить то, чем его проверяют
-          # Если файла в базовой ветке ещё нет (его вводит сам PR), ревьюер получает версию из PR с пометкой
+          # Только если файла в базовой ветке нет (404: его вводит сам PR), ревьюер получает версию из PR
+          # с пометкой. Любая другая ошибка API останавливает ревью, а не подменяет критерии молча
           for f in REVIEW.md AGENTS.md; do
             out="$ctx/${f%.md}.base.md"
-            if ! gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_REF}" --jq .content 2>/dev/null | base64 -d > "$out"; then
+            if content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_REF}" --jq .content 2> "$RUNNER_TEMP/api-error"); then
+              base64 -d <<< "$content" > "$out"
+            elif grep -q 'HTTP 404' "$RUNNER_TEMP/api-error"; then
               { echo "> ${f} нет в базовой ветке ${BASE_REF}: ниже версия из этого PR, отметь это в ревью."; echo; cat "$f"; } > "$out"
+            else
+              cat "$RUNNER_TEMP/api-error"
+              exit 1
             fi
           done
           gh pr view "$PR_NUMBER" --json number,title,author,headRefOid,baseRefName,url > "$ctx/pr.json"
@@ -71,12 +77,22 @@ jobs:
           gh pr diff "$PR_NUMBER" > "$ctx/diff.patch"
           # Результат CI на момент ревью: проверки идут параллельно, часть может быть ещё в работе
           gh pr checks "$PR_NUMBER" > "$ctx/checks.txt" 2>&1 || true
-          # Обращение, спецификация, тикеты и согласование — по ссылкам из описания PR
-          refs=$(grep -oE '(#|issues/)[0-9]+' "$ctx/pr-body.md" | grep -oE '[0-9]+' | sort -un | head -n 10 || true)
-          for n in $refs; do
-            gh issue view "$n" --comments > "$ctx/issue-$n.md" 2>/dev/null \
-              || echo "Issue #$n недоступно по ссылке из описания PR" > "$ctx/issue-$n.md"
-          done
+          # Обращение, спецификация, тикеты и согласование — по ссылкам из описания PR. Полные ссылки
+          # (owner/repo#N, github.com/owner/repo/issues/N) берутся из своего репозитория, голый #N — из этого
+          refs=$(
+            {
+              grep -oE '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#|/issues/|/pull/)[0-9]+' "$ctx/pr-body.md" \
+                | sed -E 's#^([^/]+)/([^/\#]+)(\#|/issues/|/pull/)([0-9]+)$#\1/\2 \4#' || true
+              grep -oE '(^|[^A-Za-z0-9_./-])#[0-9]+' "$ctx/pr-body.md" | grep -oE '[0-9]+' \
+                | sed "s#^#${GITHUB_REPOSITORY} #" || true
+            } | sort -u | head -n 15
+          )
+          while read -r repo n; do
+            [ -n "$repo" ] || continue
+            file="$ctx/issue-${repo//\//_}-${n}.md"
+            gh issue view "$n" --repo "$repo" --comments > "$file" 2>/dev/null \
+              || echo "${repo}#${n} недоступно по ссылке из описания PR" > "$file"
+          done <<< "$refs"
           ls -l "$ctx"
 
       - name: Install Claude Code CLI
@@ -96,7 +112,7 @@ jobs:
           Правила проекта — в .review-context/AGENTS.base.md. Если PR меняет REVIEW.md или AGENTS.md, проверяй
           по версии из базовой ветки и отдельно отметь это изменение.
           Контекст PR собран в папке .review-context: pr.json и pr-body.md (описание), pr-discussion.md
-          (обсуждение и прежние ревью), diff.patch, checks.txt (CI на момент ревью) и issue-N.md
+          (обсуждение и прежние ревью), diff.patch, checks.txt (CI на момент ревью) и issue-<owner>_<repo>-N.md
           (обращение, спецификация, тикеты и согласование по ссылкам из описания). Код смотри в рабочей папке.
           Ответ — только текст ревью в формате REVIEW.md, на русском."
           claude -p "$prompt" \
@@ -133,12 +149,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Критерии ревью берутся из базовой ветки, ссылка ведёт на ту же версию
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           {
             echo "## Авторевью"
             echo
-            echo "Проверенная версия: \`${HEAD_SHA}\` · модель \`claude-opus-5-5\` · критерии [REVIEW.md](../blob/${HEAD_SHA}/REVIEW.md) · [лог прогона](${RUN_URL})"
+            echo "Проверенная версия: \`${HEAD_SHA}\` · модель \`claude-opus-5-5\` · критерии [REVIEW.md из базовой ветки](../blob/${BASE_SHA}/REVIEW.md) · [лог прогона](${RUN_URL})"
             echo
             echo "Ревью только оставляет замечания. Исправление запускает человек командой \`@claude\` в PR."
             echo
