@@ -250,6 +250,58 @@ describe('Админка: предстоящие бронирования', () =
     ).toBeInTheDocument();
   });
 
+  it('should show total equal to table rows count when there are upcoming bookings', async () => {
+    // given
+    server.use(mockApi('bookingsList', 200, UPCOMING));
+
+    // when
+    renderApp('/admin');
+
+    // then
+    const table = await within(upcomingSection()).findByRole('table');
+    expect(within(upcomingSection()).getByText('Всего: 2')).toBeInTheDocument();
+    expect(within(table).getAllByRole('row')).toHaveLength(2 + 1);
+  });
+
+  it('should show total 1 when there is a single upcoming booking', async () => {
+    // given
+    server.use(mockApi('bookingsList', 200, [UPCOMING[0]]));
+
+    // when
+    renderApp('/admin');
+
+    // then
+    expect(await within(upcomingSection()).findByText('Всего: 1')).toBeInTheDocument();
+  });
+
+  it('should show total after section heading without changing section name', async () => {
+    // given
+    server.use(mockApi('bookingsList', 200, UPCOMING));
+
+    // when
+    renderApp('/admin');
+
+    // then
+    const total = await within(upcomingSection()).findByText('Всего: 2');
+    const heading = within(upcomingSection()).getByRole('heading', {
+      name: 'Предстоящие бронирования',
+    });
+    expect(heading.compareDocumentPosition(total) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('should not show total while bookings are loading', async () => {
+    // given
+    server.use(mockApi('bookingsList', 200, UPCOMING));
+
+    // when
+    renderApp('/admin');
+
+    // then
+    expect(within(upcomingSection()).getByRole('status')).toBeInTheDocument();
+    expect(within(upcomingSection()).queryByText(/Всего:/)).not.toBeInTheDocument();
+    await within(upcomingSection()).findByRole('table');
+  });
+
   it('should show empty state when there are no upcoming bookings', async () => {
     // given
     server.use(mockApi('bookingsList', 200, []));
@@ -262,6 +314,7 @@ describe('Админка: предстоящие бронирования', () =
       await within(upcomingSection()).findByText('Предстоящих бронирований нет'),
     ).toBeInTheDocument();
     expect(within(upcomingSection()).queryByRole('table')).not.toBeInTheDocument();
+    expect(within(upcomingSection()).queryByText(/Всего:/)).not.toBeInTheDocument();
   });
 
   it('should show connection error with retry when server is unreachable', async () => {
@@ -271,6 +324,7 @@ describe('Админка: предстоящие бронирования', () =
     renderApp('/admin');
     const alert = await within(upcomingSection()).findByRole('alert');
     expect(within(alert).getByText('Не удалось связаться с сервером')).toBeInTheDocument();
+    expect(within(upcomingSection()).queryByText(/Всего:/)).not.toBeInTheDocument();
 
     // when
     server.use(mockApi('bookingsList', 200, UPCOMING));
@@ -279,6 +333,7 @@ describe('Админка: предстоящие бронирования', () =
     // then
     const table = await within(upcomingSection()).findByRole('table');
     expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(within(upcomingSection()).getByText('Всего: 2')).toBeInTheDocument();
     expect(within(upcomingSection()).queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -298,6 +353,7 @@ describe('Админка: предстоящие бронирования', () =
     const alert = await within(upcomingSection()).findByRole('alert');
     expect(within(alert).getByText('Не удалось связаться с сервером')).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Повторить' })).toBeInTheDocument();
+    expect(within(upcomingSection()).queryByText(/Всего:/)).not.toBeInTheDocument();
   });
 
   it('should show connection error with retry when event types respond with 500', async () => {
