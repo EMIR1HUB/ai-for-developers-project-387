@@ -58,8 +58,13 @@ jobs:
           rm -rf "$ctx"
           mkdir -p "$ctx"
           # Критерии ревью и правила проекта — из базовой ветки: PR не может ослабить то, чем его проверяют
-          gh api "repos/${GITHUB_REPOSITORY}/contents/REVIEW.md?ref=${BASE_REF}" --jq .content | base64 -d > "$ctx/REVIEW.base.md"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/AGENTS.md?ref=${BASE_REF}" --jq .content | base64 -d > "$ctx/AGENTS.base.md"
+          # Если файла в базовой ветке ещё нет (его вводит сам PR), ревьюер получает версию из PR с пометкой
+          for f in REVIEW.md AGENTS.md; do
+            out="$ctx/${f%.md}.base.md"
+            if ! gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_REF}" --jq .content 2>/dev/null | base64 -d > "$out"; then
+              { echo "> ${f} нет в базовой ветке ${BASE_REF}: ниже версия из этого PR, отметь это в ревью."; echo; cat "$f"; } > "$out"
+            fi
+          done
           gh pr view "$PR_NUMBER" --json number,title,author,headRefOid,baseRefName,url > "$ctx/pr.json"
           gh pr view "$PR_NUMBER" --json body --jq .body > "$ctx/pr-body.md"
           gh pr view "$PR_NUMBER" --comments > "$ctx/pr-discussion.md"
