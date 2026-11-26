@@ -89,11 +89,21 @@ jobs:
                 | sed "s#^#${GITHUB_REPOSITORY} #" || true
             } | sort -u | head -n 15
           )
+          # Тело и комментарии берутся из JSON: вне терминала `gh issue view --comments` печатает только
+          # комментарии без текста самого обращения, и ревьюер не видел бы спецификацию и тикеты
           while read -r repo n; do
             [ -n "$repo" ] || continue
             file="$ctx/issue-${repo//\//_}-${n}.md"
-            gh issue view "$n" --repo "$repo" --comments > "$file" 2>/dev/null \
-              || echo "${repo}#${n} недоступно по ссылке из описания PR" > "$file"
+            if gh issue view "$n" --repo "$repo" --json title,state,labels,body,comments > "$RUNNER_TEMP/issue.json" 2>/dev/null; then
+              jq -r '"# \(.title) (\(.state))\nМетки: \([.labels[].name] | join(", "))\n\n## Текст обращения\n\n\(if (.body | length) > 0 then .body else "(пусто)" end)\n\n## Комментарии\n\n" + ([.comments[] | "### \(.author.login), \(.createdAt)\n\n\(.body)\n"] | join("\n"))' "$RUNNER_TEMP/issue.json" > "$file"
+            else
+              echo "${repo}#${n} недоступно по ссылке из описания PR" > "$file"
+            fi
+            # Пустой контекст по ссылке из описания — сбой сбора, а не причина для ревью без спецификации
+            if [ ! -s "$file" ]; then
+              echo "::error::Контекст ${repo}#${n} пуст: ревью без текста спецификации и тикетов не запускается"
+              exit 1
+            fi
           done <<< "$refs"
           ls -l "$ctx"
 
