@@ -26,10 +26,12 @@ jobs:
       group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
       cancel-in-progress: false
     # Стандартная авторизация через Claude GitHub App: action обменивает OIDC-токен на токен приложения,
-    # и комментарии, push и вызовы gh идут с правами приложения. Самому GITHUB_TOKEN запись не нужна
+    # и комментарии и push идут с правами приложения. issues: write нужен скиллам to-spec и to-tickets:
+    # они публикуют спецификацию и тикеты командами gh, которым нужен GH_TOKEN (см. шаг агента)
     permissions:
       contents: read
       id-token: write
+      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -40,6 +42,9 @@ jobs:
       - run: mise run install
 
       - uses: anthropics/claude-code-action@v1
+        env:
+          # Токен для gh в оболочке агента: публикация спецификации и тикетов в GitHub Issues
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Ключ только из секретов: токен подписки (claude setup-token) или API-ключ, задаётся один из двух
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
