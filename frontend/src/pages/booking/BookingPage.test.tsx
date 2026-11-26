@@ -356,6 +356,7 @@ describe('Страница бронирования: данные гостя и 
     server.use(mockApi('bookingsCreate', 409, SLOT_TAKEN));
     const user = userEvent.setup();
     renderApp('/book/call-30');
+    expect(await screen.findByText('Свободно: 2')).toBeInTheDocument();
     await openGuestForm(user);
     await fillGuestForm(user);
     // Пока гость заполнял форму, 10:00–10:30 заняли: после конфликта сервер отдаст его занятым

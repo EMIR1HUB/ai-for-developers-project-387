@@ -59,16 +59,21 @@ async function firstFreeSlot(request: APIRequestContext, eventTypeId: string): P
   return slot;
 }
 
-/** Выбор дня и слота на шаге «выбор времени» */
-async function chooseSlot(page: Page, slot: Slot): Promise<void> {
-  await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
-  // По умолчанию открыт первый день со свободными слотами; нужный день может быть следующим,
-  // в том числе в следующем месяце
+/** Открывает в календаре день слота: нужный день может быть в следующем месяце */
+async function openDay(page: Page, slot: Slot): Promise<void> {
   const day = page.getByRole('button', { name: new RegExp(`^${dayLabel(slot.start)},`) });
   if (!(await day.isVisible())) {
     await page.getByRole('button', { name: 'Следующий месяц' }).click();
   }
   await day.click();
+}
+
+/** Выбор дня и слота на шаге «выбор времени» */
+async function chooseSlot(page: Page, slot: Slot): Promise<void> {
+  await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
+  // По умолчанию открыт первый день со свободными слотами; нужный день может быть следующим,
+  // в том числе в следующем месяце
+  await openDay(page, slot);
   await page.getByRole('button', { name: `${timeRange(slot)} Свободно`, exact: true }).click();
   await page.getByRole('button', { name: 'Продолжить' }).click();
 }
@@ -202,11 +207,7 @@ test('should decrease free count in card by one when chosen slot is taken via AP
   const freeBefore = slotsOfDay.filter((candidate) => candidate.available).length;
   const card = page.getByRole('region', { name: 'Тип встречи' });
   await expect(page.getByRole('region', { name: 'Слоты дня' })).toBeVisible();
-  const day = page.getByRole('button', { name: new RegExp(`^${dayLabel(slot.start)},`) });
-  if (!(await day.isVisible())) {
-    await page.getByRole('button', { name: 'Следующий месяц' }).click();
-  }
-  await day.click();
+  await openDay(page, slot);
   await expect(card.getByText(`Свободно: ${freeBefore}`)).toBeVisible();
   await chooseSlot(page, slot);
   // chooseSlot довела до формы: к выбору времени гость вернётся после отказа

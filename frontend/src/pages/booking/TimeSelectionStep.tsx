@@ -8,7 +8,7 @@ import { paths } from '../../paths.ts';
 import { DaySlots } from './DaySlots.tsx';
 import { EventTypeSummary } from './EventTypeSummary.tsx';
 import { SlotCalendar } from './SlotCalendar.tsx';
-import { freeSlotCount, groupSlotsByDay, resolveDay } from './slotDays.ts';
+import { groupSlotsByDay, openDayFreeCount, resolveDay } from './slotDays.ts';
 
 const SKELETON_SLOTS = 6;
 
@@ -96,12 +96,8 @@ export function TimeSelectionStep({
   onContinue: () => void;
 }) {
   // Число свободных слотов дня, открытого в календаре; пока слоты не загружены, его нет
-  let freeCount: number | null = null;
-  if (slots.status === 'success') {
-    const days = groupSlotsByDay(slots.data);
-    const day = resolveDay(days, selectedDay);
-    freeCount = day === null ? null : freeSlotCount(days.get(day) ?? []);
-  }
+  const freeCount =
+    slots.status === 'success' ? openDayFreeCount(groupSlotsByDay(slots.data), selectedDay) : null;
 
   return (
     <Stack gap="lg">

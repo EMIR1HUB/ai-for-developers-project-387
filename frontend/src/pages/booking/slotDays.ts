@@ -31,3 +31,9 @@ export function defaultDay(days: SlotDays): string | null {
 export function resolveDay(days: SlotDays, selectedDay: string | null): string | null {
   return selectedDay !== null && days.has(selectedDay) ? selectedDay : defaultDay(days);
 }
+
+/** Число свободных слотов дня, открытого в календаре; `null`, если в окне нет дней */
+export function openDayFreeCount(days: SlotDays, selectedDay: string | null): number | null {
+  const day = resolveDay(days, selectedDay);
+  return day === null ? null : freeSlotCount(days.get(day) ?? []);
+}
