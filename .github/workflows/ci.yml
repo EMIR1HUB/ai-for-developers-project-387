@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Ставит версии инструментов из mise.toml
+      - uses: jdx/mise-action@v5
+
+      # Явно, а не через postinstall-хук: при кэше инструментов хук может не сработать
+      - run: mise run install
+
+      # Chromium для браузерных сценариев вместе с системными библиотеками (apt через sudo).
+      # Локально браузер скачивает postinstall-хук mise, но без системных зависимостей
+      - run: npx playwright install --with-deps chromium
+
+      # api/openapi.yaml коммитится: после генерации из api/main.tsp рабочее дерево должно
+      # остаться чистым, иначе контракт изменён без `mise run generate`
+      - run: mise run generate
+
+      - name: Check generated artifacts are committed
+        run: |
+          git diff --exit-code
+          changes="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::mise run generate changed committed files. Run it locally and commit the result."
+            exit 1
+          fi
+
+      - run: mise run check
+
+      # Отчёт Playwright со следами (trace) упавших сценариев
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 7
+
+  # Образ из Dockerfile собирается и стартует так же, как будет на хостинге: порт из PORT,
+  # без базы данных и других внешних сервисов. В реестр образ не публикуется
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - run: docker build --tag calendar:ci .
+
+      # Порт 8080 вместо порта по умолчанию (3000) проверяет, что приложение слушает именно PORT
+      - name: Start container
+        run: docker run --detach --name calendar --env PORT=8080 --publish 8080:8080 calendar:ci
+
+      - name: Check container responds
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:8080
+
+          # Старт занимает секунды: ждём, пока /api/health ответит. Пока приложение не слушает порт,
+          # Docker уже принимает соединение и сбрасывает его (connection reset), а не отказывает,
+          # поэтому повторять нужно любые ошибки (--retry-all-errors), не только connection refused
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors \
+            "$base/api/health" | grep --fixed-strings '"status":"ok"'
+
+          # Фронтенд раздаёт сам сервер: главная страница и адрес SPA получают index.html
+          curl --fail --silent "$base/" | grep --fixed-strings '<div id="root">'
+          curl --fail --silent "$base/book/intro-15" | grep --fixed-strings '<div id="root">'
+
+          # Неизвестный адрес под /api отвечает JSON, а не index.html
+          status="$(curl --silent --output /tmp/not-found.json --write-out '%{http_code}' "$base/api/no-such-route")"
+          test "$status" = 404
+          grep --fixed-strings '"code":"NOT_FOUND"' /tmp/not-found.json
+
+          # Демо-типы встреч создаются при старте (DEMO_DATA включён по умолчанию)
+          curl --fail --silent "$base/api/event-types" | grep --fixed-strings '"id":"intro-15"'
+
+      - name: Container logs
+        if: always()
+        run: docker logs calendar

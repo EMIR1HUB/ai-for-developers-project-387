@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+# Отчёт и следы упавших браузерных тестов Playwright
+playwright-report/
+test-results/
+*.log
+.DS_Store
+.idea/
+
+# Генерируется из api/openapi.yaml командой `mise run generate`
+backend/src/generated/
+frontend/src/api/generated/
+.env
+.env.*
+!.env.example

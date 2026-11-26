@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "ignorePatterns": [
+    ".github/workflows/hexlet-check.yml",
+    "api/openapi.yaml",
+    ".claude/skills/**",
+    "skills-lock.json",
+    "CHANGELOG.md"
+  ]
+}

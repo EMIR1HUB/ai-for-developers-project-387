@@ -1,0 +1,480 @@
+openapi: 3.1.0
+info:
+  title: Calendar API
+  version: 0.0.0
+tags:
+  - name: Health
+  - name: Owner
+  - name: EventTypes
+  - name: Bookings
+paths:
+  /api/bookings:
+    get:
+      operationId: Bookings_list
+      description: |-
+        Предстоящие бронирования всех типов встреч по возрастанию начала: те, что ещё не закончились
+        (`end` позже текущего момента), в том числе идущее прямо сейчас
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Booking'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - Bookings
+    post:
+      operationId: Bookings_create
+      description: |-
+        Создание бронирования гостем; конец сервер считает по длительности типа встречи.
+        `422`: `VALIDATION_ERROR` — поля невалидны; `SLOT_NOT_OFFERED` — `start` не совпадает с началом
+        слота, который сейчас предлагает ручка слотов (причина в `message`).
+        `409 SLOT_TAKEN` — интервал пересекается с бронированием любого типа встречи
+      parameters: []
+      responses:
+        '201':
+          description: Ресурс создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Booking'
+        '400':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '422':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - Bookings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewBooking'
+  /api/event-types:
+    get:
+      operationId: EventTypes_list
+      description: Типы встреч в порядке создания
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventType'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - EventTypes
+    post:
+      operationId: EventTypes_create
+      description: Создание типа встречи владельцем. Занятый идентификатор — `409 EVENT_TYPE_ID_TAKEN`
+      parameters: []
+      responses:
+        '201':
+          description: Ресурс создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventType'
+        '400':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '422':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - EventTypes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewEventType'
+  /api/event-types/{id}:
+    get:
+      operationId: EventTypes_get
+      description: Тип встречи по идентификатору
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventType'
+        '404':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - EventTypes
+  /api/event-types/{id}/slots:
+    get:
+      operationId: EventTypes_listSlots
+      description: |-
+        Все слоты окна записи (сегодня по поясу владельца и ещё 13 дней) по возрастанию начала.
+        Слоты, которые уже начались, остаются в списке с `available: false`
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Slot'
+        '404':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - EventTypes
+  /api/health:
+    get:
+      operationId: HealthCheck_check
+      description: Проверка, что сервис запущен и отвечает
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+      tags:
+        - Health
+  /api/owner:
+    get:
+      operationId: Owner_get
+      description: Профиль владельца
+      parameters: []
+      responses:
+        '200':
+          description: The request has succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerProfile'
+        '500':
+          description: 'Ответ с ошибкой: статус и общее тело ошибки'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      tags:
+        - Owner
+components:
+  schemas:
+    ApiError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          description: Текст для пользователя на русском, фронтенд показывает его как есть
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+          description: Все ошибочные поля, только для `422 VALIDATION_ERROR`
+      description: Тело любой ошибки API
+    Booking:
+      type: object
+      required:
+        - id
+        - eventType
+        - start
+        - end
+        - guestName
+        - guestEmail
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID, который назначает сервер
+        eventType:
+          $ref: '#/components/schemas/BookingEventType'
+        start:
+          type: string
+          format: date-time
+          description: Начало со смещением пояса владельца, например `2026-11-25T10:00:00+05:00`
+        end:
+          type: string
+          format: date-time
+          description: 'Конец: начало плюс длительность типа встречи, считает сервер'
+        guestName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        guestEmail:
+          type: string
+          maxLength: 254
+          description: Как ввёл гость
+        note:
+          type: string
+          maxLength: 1000
+          description: Заметка гостя для владельца, нет, если гость её не оставил
+        createdAt:
+          type: string
+          format: date-time
+          description: Момент создания со смещением пояса владельца
+      description: Интервал `[start, end)`, занятый гостем под тип встречи. После создания не меняется и не отменяется
+    BookingEventType:
+      type: object
+      required:
+        - id
+        - title
+        - durationMinutes
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        durationMinutes:
+          type: integer
+          format: int32
+      description: Сводка типа встречи в бронировании
+    ErrorCode:
+      type: string
+      enum:
+        - VALIDATION_ERROR
+        - SLOT_NOT_OFFERED
+        - EVENT_TYPE_NOT_FOUND
+        - NOT_FOUND
+        - EVENT_TYPE_ID_TAKEN
+        - SLOT_TAKEN
+        - MALFORMED_REQUEST
+        - INTERNAL_ERROR
+      description: 'Код ошибки: закрытое перечисление, клиент различает ошибки по нему'
+    EventType:
+      type: object
+      required:
+        - id
+        - title
+        - description
+        - durationMinutes
+      properties:
+        id:
+          type: string
+          minLength: 3
+          maxLength: 50
+          pattern: ^[a-z0-9]+(-[a-z0-9]+)*$
+          description: 'Идентификатор, который задаёт владелец: строчные латинские буквы, цифры и дефис (не в начале, не в конце и не подряд)'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+          description: Может быть пустым
+        durationMinutes:
+          type: integer
+          format: int32
+          minimum: 15
+          maximum: 240
+          description: Длительность в минутах, кратна 15
+      description: Шаблон встречи владельца. После создания не меняется и не удаляется
+    FieldError:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: Имя поля, вложенные поля через точку
+        message:
+          type: string
+          description: Текст ошибки для пользователя
+      description: Ошибка одного поля запроса
+    Health:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+    NewBooking:
+      type: object
+      required:
+        - eventTypeId
+        - start
+        - guestName
+        - guestEmail
+      properties:
+        eventTypeId:
+          type: string
+          description: Идентификатор типа встречи
+        start:
+          type: string
+          description: |-
+            Начало слота из `GET /api/event-types/{id}/slots`: ISO 8601 со смещением или `Z`,
+            время без смещения — `422 VALIDATION_ERROR`
+        guestName:
+          type: string
+          description: 1–100 символов
+        guestEmail:
+          type: string
+          description: Формат email, до 254 символов
+        note:
+          type: string
+          description: До 1000 символов
+      description: |-
+        Новое бронирование. Сервер обрезает пробелы по краям строк и только потом проверяет поля
+        по правилам `Booking`, поэтому ограничения формата здесь не повторяются
+    NewEventType:
+      type: object
+      required:
+        - id
+        - title
+        - description
+        - durationMinutes
+      properties:
+        id:
+          type: string
+          description: Строчные латинские буквы, цифры и дефис (не в начале, не в конце и не подряд), 3–50 символов
+        title:
+          type: string
+          description: 1–100 символов
+        description:
+          type: string
+          description: До 500 символов, может быть пустым
+        durationMinutes:
+          type: integer
+          format: int32
+          description: 15–240, кратно 15
+      description: |-
+        Новый тип встречи. Сервер обрезает пробелы по краям строк и только потом проверяет поля
+        по правилам `EventType`, поэтому ограничения формата здесь не повторяются
+    OwnerProfile:
+      type: object
+      required:
+        - name
+        - subtitle
+        - timeZone
+      properties:
+        name:
+          type: string
+        subtitle:
+          type: string
+          description: Подпись под именем, например род занятий
+        timeZone:
+          type: string
+          description: Часовой пояс владельца в формате IANA, например `Asia/Almaty`
+      description: Профиль владельца, который видит гость. Задан в конфиге бэкенда
+    Slot:
+      type: object
+      required:
+        - start
+        - end
+        - available
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Начало со смещением пояса владельца, например `2026-11-24T09:00:00+05:00`
+        end:
+          type: string
+          format: date-time
+          description: 'Конец: начало плюс длительность типа встречи'
+        available:
+          type: boolean
+          description: '`false`, если слот уже начался или пересекается с бронированием любого типа встречи'
+      description: |-
+        Интервал времени `[start, end)` длиной в длительность типа встречи внутри рабочих часов владельца.
+        Не хранится, сервер вычисляет его по текущему моменту и бронированиям

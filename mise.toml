@@ -1,0 +1,74 @@
+[settings]
+# daemons (фоновые dev-серверы) в mise пока экспериментальные
+experimental = true
+
+[tools]
+node = "24.22.3"
+hk = "2.13.0"
+pitchfork = "2.36.0"
+actionlint = "1.7.12"
+
+[env]
+# oxlint, oxfmt, commitlint и др. ставятся через npm, hk вызывает их по имени
+_.path = ["{{config_root}}/node_modules/.bin"]
+
+[hooks]
+postinstall = [{ task = "install" }, { task = "browsers" }, "hk install --mise"]
+
+[tasks.install]
+description = "Установить npm-зависимости по lock-файлу"
+run = "npm ci"
+
+[tasks.browsers]
+description = "Скачать Chromium для браузерных тестов (версию задаёт @playwright/test)"
+# Без --with-deps: системные библиотеки ставятся через sudo/apt, это делает только CI
+run = "playwright install chromium"
+
+[tasks.generate]
+description = "TypeSpec → api/openapi.yaml → типы бэкенда и SDK фронтенда"
+run = [
+  "npm run build -w @calendar/api",
+  "npm run generate -w @calendar/backend",
+  "npm run generate -w @calendar/frontend",
+]
+
+[tasks.lint]
+description = "Линтеры и проверка форматирования (те же шаги, что в git-хуке)"
+run = "hk check --all"
+
+[tasks.format]
+description = "Автоисправление линтеров и форматирование"
+run = "hk fix --all"
+
+[tasks.typecheck]
+description = "Проверка типов бэкенда и фронтенда"
+depends = ["generate"]
+run = "npm run typecheck --workspaces --if-present"
+
+[tasks.test]
+description = "Тесты бэкенда и фронтенда"
+depends = ["generate"]
+run = "npm test --workspaces --if-present"
+
+[tasks.e2e]
+description = "Браузерные сценарии: сборка фронтенда и Playwright на сервере :4173"
+depends = ["generate"]
+run = ["npm run build -w @calendar/frontend", "npm run e2e -w @calendar/e2e"]
+
+[tasks.check]
+description = "Все проверки: линтеры, типы, тесты, браузерные сценарии (локально и в CI)"
+depends = ["lint", "typecheck", "test", "e2e"]
+
+[tasks.dev]
+description = "Запустить бэкенд и фронтенд как фоновые daemons"
+depends = ["generate"]
+run = "mise daemons start backend frontend && mise daemons ls"
+
+[daemons.backend]
+run = "exec npm run dev -w @calendar/backend"
+ready_port = 3000
+
+[daemons.frontend]
+run = "exec npm run dev -w @calendar/frontend"
+ready_port = 5173
+depends = ["backend"]

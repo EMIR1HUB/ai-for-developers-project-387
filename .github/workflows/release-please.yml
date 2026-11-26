@@ -1,0 +1,21 @@
+name: release-please
+
+# Держит открытым релизный PR по Conventional Commits; его слияние ставит тег vX.Y.Z
+# и создаёт GitHub Release. Настройки в release-please-config.json и .release-please-manifest.json.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # release-type не задаём во входах: иначе action игнорирует конфиг-файлы (и bootstrap-sha)
+      - uses: googleapis/release-please-action@v5
+        id: release

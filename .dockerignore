@@ -1,0 +1,31 @@
+# Всё, что не нужно образу и только раздувает контекст сборки или ломает кэш
+.git
+.github
+.claude
+.idea
+.remember
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+playwright-report
+test-results
+*.log
+.DS_Store
+
+# Сгенерированное в образе создаёт сам Dockerfile (SDK фронтенда)
+backend/src/generated
+frontend/src/api/generated
+
+# Тесты и браузерные сценарии в образ не входят.
+# package.json каждого workspace нужен для `npm ci` по lock-файлу
+backend/test
+e2e/*
+!e2e/package.json
+
+# Секреты и локальное окружение
+.env
+.env.*
+!.env.example
+.mcp.local.json

@@ -1,0 +1,17 @@
+# Blueprint для Render: сервис создаётся один раз через New → Blueprint (см. README, «Деплой»).
+# Render MCP не умеет задавать Docker-режим и health check при создании сервиса,
+# поэтому эти настройки лежат здесь, а MCP нужен для деплоев, логов и проверок.
+services:
+  - type: web
+    name: calendar
+    runtime: docker
+    # Бесплатный тариф: сервис засыпает через 15 минут без запросов, данные в памяти сбрасываются
+    plan: free
+    branch: main
+    dockerfilePath: ./Dockerfile
+    # Каждый коммит в main выкатывается автоматически
+    autoDeployTrigger: commit
+    # Render ждёт ответ 2xx/3xx на этот адрес, прежде чем переключить трафик на новый деплой
+    healthCheckPath: /api/health
+    # PORT задаёт сам Render (по умолчанию 10000), приложение читает его из окружения.
+    # DEMO_DATA не задан: при каждом старте создаются демо-типы встреч
