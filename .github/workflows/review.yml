@@ -46,6 +46,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Критерии — из того же коммита базы, на который ссылается подпись ревью
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           ctx=.review-context
@@ -62,7 +64,7 @@ jobs:
           # с пометкой. Любая другая ошибка API останавливает ревью, а не подменяет критерии молча
           for f in REVIEW.md AGENTS.md; do
             out="$ctx/${f%.md}.base.md"
-            if content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_REF}" --jq .content 2> "$RUNNER_TEMP/api-error"); then
+            if content=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${f}?ref=${BASE_SHA}" --jq .content 2> "$RUNNER_TEMP/api-error"); then
               base64 -d <<< "$content" > "$out"
             elif grep -q 'HTTP 404' "$RUNNER_TEMP/api-error"; then
               { echo "> ${f} нет в базовой ветке ${BASE_REF}: ниже версия из этого PR, отметь это в ревью."; echo; cat "$f"; } > "$out"
