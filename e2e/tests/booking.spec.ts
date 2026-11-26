@@ -237,3 +237,40 @@ test('should decrease free count in card by one when chosen slot is taken via AP
   await expect(page.getByRole('textbox', { name: 'Email' })).toHaveValue(guest.email);
   await expect(page.getByRole('textbox', { name: 'Заметка' })).toHaveValue(guest.note);
 });
+
+test('should show total in admin equal to table rows count when guest books a slot', async ({
+  page,
+  request,
+}) => {
+  // given
+  const suffix = uniqueSuffix();
+  const eventType: EventType = {
+    id: `e2e-total-${suffix}`,
+    title: `Созвон для счётчика ${suffix}`,
+    description: '',
+    durationMinutes: 15,
+  };
+  const created = await request.post('/api/event-types', { data: eventType });
+  expect(created.status()).toBe(201);
+  const slot = await firstFreeSlot(request, eventType.id);
+  const booking: NewBooking = {
+    eventTypeId: eventType.id,
+    start: slot.start,
+    guestName: 'Глеб Гостев',
+    guestEmail: `gleb-${suffix}@example.com`,
+  };
+  const booked = await request.post('/api/bookings', { data: booking });
+  expect(booked.status()).toBe(201);
+
+  // when
+  await page.goto('/admin');
+
+  // then
+  const section = page.getByRole('region', { name: 'Предстоящие бронирования' });
+  const table = section.getByRole('table', { name: 'Предстоящие бронирования' });
+  await expect(table.getByRole('row', { name: booking.guestEmail })).toBeVisible();
+  // Расписание общее на все сценарии: сверяем число с таблицей, а не с абсолютным значением
+  const rowsCount = (await table.getByRole('row').count()) - 1;
+  expect(rowsCount).toBeGreaterThanOrEqual(1);
+  await expect(section.getByText(`Всего: ${rowsCount}`)).toBeVisible();
+});
