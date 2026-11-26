@@ -8,7 +8,7 @@ import { paths } from '../../paths.ts';
 import { DaySlots } from './DaySlots.tsx';
 import { EventTypeSummary } from './EventTypeSummary.tsx';
 import { SlotCalendar } from './SlotCalendar.tsx';
-import { defaultDay, groupSlotsByDay } from './slotDays.ts';
+import { freeSlotCount, groupSlotsByDay, resolveDay } from './slotDays.ts';
 
 const SKELETON_SLOTS = 6;
 
@@ -43,8 +43,7 @@ function SlotPicker({
   onSelectSlot: (slot: Slot) => void;
 }) {
   const days = groupSlotsByDay(slots);
-  // Выбранный гостем день мог исчезнуть из окна после перезагрузки слотов
-  const day = selectedDay !== null && days.has(selectedDay) ? selectedDay : defaultDay(days);
+  const day = resolveDay(days, selectedDay);
 
   if (day === null) {
     return (
@@ -96,11 +95,24 @@ export function TimeSelectionStep({
   onSelectSlot: (slot: Slot) => void;
   onContinue: () => void;
 }) {
+  // Число свободных слотов дня, открытого в календаре; пока слоты не загружены, его нет
+  let freeCount: number | null = null;
+  if (slots.status === 'success') {
+    const days = groupSlotsByDay(slots.data);
+    const day = resolveDay(days, selectedDay);
+    freeCount = day === null ? null : freeSlotCount(days.get(day) ?? []);
+  }
+
   return (
     <Stack gap="lg">
       <Grid gap="lg">
         <Grid.Col span={{ base: 12, md: 4 }}>
-          <EventTypeSummary eventType={eventType} owner={owner} selectedSlot={selectedSlot} />
+          <EventTypeSummary
+            eventType={eventType}
+            owner={owner}
+            selectedSlot={selectedSlot}
+            freeCount={freeCount}
+          />
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 8 }}>
           <Stack gap="sm">

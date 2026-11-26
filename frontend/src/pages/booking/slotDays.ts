@@ -26,3 +26,8 @@ export function defaultDay(days: SlotDays): string | null {
   }
   return days.keys().next().value ?? null;
 }
+
+/** День, открытый в календаре: выбранный гостем, а если он исчез из окна после перезагрузки слотов, то день по умолчанию */
+export function resolveDay(days: SlotDays, selectedDay: string | null): string | null {
+  return selectedDay !== null && days.has(selectedDay) ? selectedDay : defaultDay(days);
+}
