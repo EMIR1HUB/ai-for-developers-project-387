@@ -11,6 +11,8 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  # Запуск ci.yml на релизном PR (см. шаг ниже)
+  actions: write
 
 jobs:
   release-please:
@@ -19,3 +21,23 @@ jobs:
       # release-type не задаём во входах: иначе action игнорирует конфиг-файлы (и bootstrap-sha)
       - uses: googleapis/release-please-action@v5
         id: release
+
+      # Релизный PR создаёт и обновляет GITHUB_TOKEN, а push от этого токена не запускает ci.yml. Обязательная
+      # проверка check на main не появилась бы, и PR навсегда остался бы заблокированным. Запуск workflow_dispatch
+      # от GITHUB_TOKEN разрешён, и его check-run ложится на коммит ветки релизного PR. Если check на последнем
+      # коммите ветки уже есть, повторно не запускаем
+      - name: Run CI on release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr list --state open --label "autorelease: pending" --json headRefName,headRefOid \
+            --jq '.[] | "\(.headRefName) \(.headRefOid)"' | while read -r branch sha; do
+            [ -n "$branch" ] || continue
+            existing=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs" --jq '[.check_runs[] | select(.name == "check")] | length')
+            if [ "$existing" -eq 0 ]; then
+              echo "Запуск ci на ${branch} (${sha})"
+              gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
+            else
+              echo "check на ${sha} уже есть, повторно не запускаем"
+            fi
+          done
