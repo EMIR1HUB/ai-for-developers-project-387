@@ -29,7 +29,12 @@ jobs:
       - name: Run CI on release PR
         env:
           GH_TOKEN: ${{ github.token }}
+          # Без checkout в задании нет git-репозитория: gh берёт репозиторий отсюда, а не из каталога
+          GH_REPO: ${{ github.repository }}
         run: |
+          # Ошибка gh в начале конвейера не должна пропадать: без pipefail шаг оставался зелёным,
+          # хотя ci не запускался (первая версия шага падала на gh pr list без репозитория и без git)
+          set -euo pipefail
           gh pr list --state open --label "autorelease: pending" --json headRefName,headRefOid \
             --jq '.[] | "\(.headRefName) \(.headRefOid)"' | while read -r branch sha; do
             [ -n "$branch" ] || continue
