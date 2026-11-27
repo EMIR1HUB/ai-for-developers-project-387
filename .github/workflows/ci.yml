@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - '**'
+  # Запуск на релизном PR: его ветку обновляет GITHUB_TOKEN, а такой push не запускает workflows
+  # (release-please.yml запускает ci вручную). Без этого обязательная проверка check не появилась бы
+  workflow_dispatch:
 
 permissions:
   contents: read
