@@ -7,7 +7,9 @@ import { freeSlotCount, type SlotDays } from './slotDays.ts';
 // Календарь красит выбранный день основным цветом темы, а акцент приложения — оранжевый
 const SELECTED_DAY_STYLE = {
   backgroundColor: 'var(--mantine-color-orange-filled)',
-  color: 'var(--mantine-color-white)',
+  // inline-стиль обходит autoContrast, поэтому берём ту же пару явно (чёрный на оранжевом, 8.17:1).
+  // `--mantine-color-orange-contrast` у встроенного цвета не существует, только у виртуальных.
+  color: 'var(--mantine-color-black)',
 };
 
 /**
@@ -26,8 +28,9 @@ export function SlotCalendar({
   const windowDays = [...days.keys()];
   const freeCount = (day: string) => freeSlotCount(days.get(day) ?? []);
   const freeCountColor = (day: string) => {
+    // В выбранном дне цвет наследуется от дня (SELECTED_DAY_STYLE)
     if (day === selectedDay) {
-      return 'white';
+      return undefined;
     }
     return freeCount(day) > 0 ? 'orange' : 'dimmed';
   };
