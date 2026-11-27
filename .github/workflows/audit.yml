@@ -207,7 +207,8 @@ jobs:
 
       # Агент получает prompt (комментария человека нет) и токен для gh. План уже составлен, поэтому
       # повторный запуск с теми же данными не заводит новую задачу и не плодит одинаковые комментарии
-      - uses: anthropics/claude-code-action@v1
+      - id: agent
+        uses: anthropics/claude-code-action@v1
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -234,8 +235,13 @@ jobs:
                или ни один отчёт не получен), issue не создавай и не комментируй.
                status.txt = partial: в conclusion.md отдельно напиши, что по страницам из pagesWithoutData в summary.json
                данных нет; находки остальных страниц выполни по плану.
-            2. action = create: создай один issue (`gh issue create`). Лимит в 3 новых за прогон уже применён кодом:
-               лишним находкам шаг поставил action = deferred, их не создавай.
+            2. action = create: создай один issue. Сначала запиши тело инструментом Write в файл
+               ${{ env.REPORT_DIR }}/issue-<номер находки по порядку в plan.json>.md, затем выполни ровно одну команду
+               такого вида, без `cd`, `&&`, конвейеров, подстановок `$(...)` и heredoc (такие команды не проходят
+               список разрешённого): `gh issue create --title "<заголовок>" --label audit --label needs-triage
+               --body-file ${{ env.REPORT_DIR }}/issue-1.md` (для учебного отчёта добавь `--label training`).
+               Лимит в 3 новых за прогон уже применён кодом: лишним находкам шаг поставил action = deferred, их не создавай.
+               Если команда отклонена, не пытайся обойти запрет другими инструментами: так и напиши в conclusion.md.
                Метки: audit и needs-triage, для учебного отчёта ещё training. В первой строке тела: комментарий
                `<!-- audit-finding: <key> -->`. В теле: проблема, предлагаемое действие, какое приложение и адрес проверялись,
                score и displayValue на момент создания, ссылка на этот прогон и на артефакт `audit-${{ github.run_id }}`
@@ -258,7 +264,40 @@ jobs:
             --model claude-sonnet-5-5
             --max-turns 30
             --permission-mode dontAsk
-            --allowedTools "Read,Glob,Grep,Write,Bash(gh issue create:*),Bash(gh issue comment:*)"
+            --allowedTools "Read,Glob,Grep,Write,Bash(gh issue create:*),Bash(gh issue create *),Bash(gh issue comment:*),Bash(gh issue comment *)"
+
+      # Запись выполнения агента: видно, какие команды он вызвал и какие отклонены. Содержит только публичные
+      # данные (отчёт, задачи репозитория), токен агенту не показывается
+      - name: Save agent execution log
+        if: always() && steps.agent.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
+        run: cp "$EXECUTION_FILE" "$REPORT_DIR/agent-execution.json" || true
+
+      # Проверка без модели: план должен быть выполнен. Зелёный прогон агента не доказывает, что задача создана:
+      # агент мог получить отказ на команду и честно написать об этом в conclusion.md
+      - name: Verify plan executed
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -s "$REPORT_DIR/plan.json" ] || { echo "plan.json отсутствует, проверять нечего"; exit 0; }
+          gh issue list --label audit --state all --limit 200 --json number,state,body,comments > "$RUNNER_TEMP/after.json"
+          jq -n --slurpfile p "$REPORT_DIR/plan.json" --slurpfile i "$RUNNER_TEMP/after.json" '
+            [ $p[0][] | select(.action == "create" or .action == "comment_recurrence") | . as $x
+              | ("<!-- audit-finding: " + $x.key + " -->") as $marker
+              | ("<!-- audit-recurrence: " + $x.key + " -->") as $rmarker
+              | ($i[0] | map(select(.body | contains($marker))) | .[0]) as $issue
+              | {key: $x.key, action: $x.action, issue: ($issue.number // null),
+                 done: (if $x.action == "create" then ($issue != null)
+                        else ($issue != null and ([$issue.comments[] | select(.body | contains($rmarker))] | length) > 0) end)} ]' \
+            > "$REPORT_DIR/plan-result.json"
+          cat "$REPORT_DIR/plan-result.json"
+          missing=$(jq '[.[] | select(.done | not)] | length' "$REPORT_DIR/plan-result.json")
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::План выполнен не полностью: $missing находок без задачи или комментария (см. conclusion.md и agent-execution.json)"
+            exit 1
+          fi
 
       # Проверка без модели: один ключ находки не должен жить в двух issue. Страховка от сбоя агента
       - name: Check no duplicate findings
