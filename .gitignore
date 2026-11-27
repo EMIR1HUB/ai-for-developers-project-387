@@ -4,6 +4,8 @@ coverage/
 # Отчёт и следы упавших браузерных тестов Playwright
 playwright-report/
 test-results/
+# Отчёты регулярного аудита (.github/workflows/audit.yml): хранятся артефактом прогона, не в коммитах
+audit-reports/
 *.log
 .DS_Store
 .idea/

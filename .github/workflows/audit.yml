@@ -1,0 +1,226 @@
+name: audit
+
+# Регулярный аудит страниц приложения: Lighthouse-отчёт сохраняется артефактом, агент разбирает сводку,
+# ищет уже заведённые задачи и создаёт issue только по новой находке. Решение «брать в работу» остаётся
+# за человеком. Режим training подставляет явно обозначенный учебный отчёт вместо реального аудита.
+# Описание, результаты прогонов и выводы: README.md, раздел «Регулярный аудит»
+run-name: "audit (${{ inputs.mode || 'lighthouse' }})"
+
+on:
+  # Не чаще одного запуска в сутки, время в UTC (08:17 по Алматы). GitHub не гарантирует точное время
+  schedule:
+    - cron: '17 3 * * *'
+  # Ручной запуск того же воркфлоу из основной ветки: Actions → audit → Run workflow
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'lighthouse — реальный аудит по APP_URL, training — учебный отчёт с выдуманной находкой'
+        type: choice
+        options: [lighthouse, training]
+        default: lighthouse
+
+# Параллельные аудиты не нужны: следующий запуск ждёт, текущий не прерывается
+concurrency:
+  group: audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # id-token: обмен OIDC-токена на токен Claude GitHub App, issues: write — создание и комментарии issue
+    # командами gh, которым нужен GH_TOKEN (см. шаг агента). Прав на код и PR нет
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    env:
+      MODE: ${{ inputs.mode || 'lighthouse' }}
+      APP_URL: ${{ vars.APP_URL }}
+      # Отчёты не попадают в коммиты: каталог в .gitignore, вне рабочих файлов проекта
+      REPORT_DIR: audit-reports
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Prepare report directory
+        run: mkdir -p "$REPORT_DIR"
+
+      # Без адреса приложения проверять нечего: падаем сразу, а не отдаём агенту пустой отчёт
+      - name: Check APP_URL
+        if: env.MODE == 'lighthouse'
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::Не задана переменная репозитория APP_URL (Settings → Secrets and variables → Actions → Variables)"
+            exit 1
+          fi
+
+      # Бесплатный тариф Render засыпает: первый запрос просыпается до минуты. Если приложение так и не
+      # ответило, данных нет, и это отдельный итог аудита, а не «проблем не найдено»
+      - name: Warm up application
+        if: env.MODE == 'lighthouse'
+        run: |
+          if curl --fail --silent --show-error --location --max-time 20 \
+            --retry 8 --retry-delay 10 --retry-all-errors "${APP_URL%/}/api/health" > /dev/null; then
+            echo "status=available" > "$REPORT_DIR/status.txt"
+          else
+            echo "status=unavailable" > "$REPORT_DIR/status.txt"
+            echo "::warning::Приложение ${APP_URL} не ответило за две минуты: аудит без данных"
+          fi
+
+      - uses: actions/setup-node@v6
+        if: env.MODE == 'lighthouse'
+        with:
+          node-version: '24'
+
+      # Реальные Lighthouse-отчёты по двум страницам: главная и страница бронирования демо-типа встречи
+      - name: Run Lighthouse
+        if: env.MODE == 'lighthouse'
+        run: |
+          if grep -q 'status=unavailable' "$REPORT_DIR/status.txt"; then
+            echo "Приложение недоступно, Lighthouse не запускается"
+            exit 0
+          fi
+          i=0
+          for path in / /book/intro-15; do
+            i=$((i + 1))
+            npx --yes lighthouse@13.6.0 "${APP_URL%/}${path}" \
+              --only-categories=performance,accessibility,best-practices,seo \
+              --chrome-flags="--headless --no-sandbox" \
+              --output=json --output-path="$REPORT_DIR/lighthouse-${i}.json" --quiet \
+              || echo "::warning::Lighthouse не отработал для ${path}"
+          done
+
+      # Учебный режим: отчёт собирается здесь и в репозитории не хранится. Находка выдуманная и обозначена
+      # как учебная в самих данных, чтобы агент не принял её за дефект приложения
+      - name: Prepare training report
+        if: env.MODE == 'training'
+        run: |
+          echo "status=training" > "$REPORT_DIR/status.txt"
+          cat > "$REPORT_DIR/summary.json" <<'JSON'
+          {
+            "training": true,
+            "note": "УЧЕБНЫЙ ОТЧЁТ для проверки воркфлоу аудита. Находка выдумана, это не дефект приложения.",
+            "url": "учебная страница /training",
+            "categories": {"performance": 0.62},
+            "failedAudits": [
+              {
+                "id": "training-uncompressed-response",
+                "title": "Учебная находка: ответ не сжимается",
+                "page": "/training",
+                "score": 0.2,
+                "displayValue": "потенциальная экономия 120 КиБ (выдуманное значение)"
+              }
+            ]
+          }
+          JSON
+
+      # Краткая сводка для агента: полный отчёт слишком велик. Проваленные проверки с оценкой ниже 0.5
+      - name: Summarize Lighthouse reports
+        if: env.MODE == 'lighthouse'
+        run: |
+          shopt -s nullglob
+          files=("$REPORT_DIR"/lighthouse-*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo '{"training": false, "categories": {}, "failedAudits": []}' > "$REPORT_DIR/summary.json"
+            exit 0
+          fi
+          jq -s --arg url "$APP_URL" '{
+            training: false,
+            url: $url,
+            pages: [.[] | {
+              page: (.requestedUrl | sub("^https?://[^/]+"; "") | if . == "" then "/" else . end),
+              fetchTime: .fetchTime,
+              lighthouseVersion: .lighthouseVersion,
+              categories: (.categories | map_values(.score))
+            }],
+            failedAudits: [.[] | .requestedUrl as $u | .audits | to_entries[]
+              | select(.value.score != null and .value.score < 0.5 and .value.scoreDisplayMode != "informative" and .value.scoreDisplayMode != "notApplicable")
+              | {id: .key, title: .value.title, page: ($u | sub("^https?://[^/]+"; "") | if . == "" then "/" else . end),
+                 score: .value.score, displayValue: (.value.displayValue // "")}]
+          }' "${files[@]}" > "$REPORT_DIR/summary.json"
+          jq -c '{pages: [.pages[] | {page, categories}], failed: (.failedAudits | length)}' "$REPORT_DIR/summary.json"
+
+      # Агент получает prompt (комментария человека нет) и токен для gh. Ключ находки стабильный, поэтому
+      # повторный запуск с теми же данными находит прежнюю задачу, а не заводит новую
+      - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Ты разбираешь регулярный аудит приложения «Календарь звонков» в репозитории ${{ github.repository }}.
+            Режим запуска: ${{ env.MODE }}. Проверялся адрес: ${{ env.APP_URL }}. Ссылка на этот прогон: ${{ env.RUN_URL }}
+            Данные лежат в каталоге ${{ env.REPORT_DIR }}: status.txt (available, unavailable или training),
+            summary.json (сводка находок), для реального аудита ещё lighthouse-N.json (полные отчёты). Читай только их.
+            Код не меняй, PR не создавай, файлы пиши только в ${{ env.REPORT_DIR }}.
+
+            Правила:
+            1. status.txt = unavailable: данных нет. Это не означает, что проблем нет или что исправленное осталось
+               исправленным. В conclusion.md напиши «Нет данных: приложение недоступно», issue не создавай и не закрывай.
+            2. Иначе возьми failedAudits из summary.json. Каждой находке дай ключ `<источник>:<id проверки>:<страница>`,
+               где источник lighthouse (или training для учебного отчёта), например `lighthouse:unused-javascript:/`.
+            3. Перед созданием issue ищи существующую задачу с этим ключом среди открытых и закрытых:
+               `gh issue list --label audit --state all --search "audit-finding: <ключ> in:body" --json number,state,title`.
+               Подтверди совпадение, прочитав тело найденных issue (`gh issue view N --json body,comments`): ключ должен быть
+               в комментарии `<!-- audit-finding: <ключ> -->`.
+            4. Если задача есть и новых сведений нет (оценка и значение прежние): ничего не создавай и не комментируй,
+               в conclusion.md укажи номер существующей задачи.
+               Если задача есть, но закрыта, а находка снова появилась: оставь в ней один комментарий о возврате проблемы
+               со ссылкой на этот прогон, новую задачу не заводи.
+               Если задача есть и данные изменились: один комментарий с новым значением и ссылкой на прогон.
+            5. Если задачи нет: создай один issue (`gh issue create`) не больше чем на 3 новых находки за прогон.
+               Метки: audit и needs-triage, для учебного отчёта ещё training. В первой строке тела: комментарий
+               `<!-- audit-finding: <ключ> -->`. В теле: проблема, предлагаемое действие, какое приложение и адрес проверялись,
+               ссылка на этот прогон и на артефакт `audit-${{ github.run_id }}` (хранится 90 дней, поэтому главная ссылка на
+               прогон). Для учебного отчёта в начале тела напиши жирным: «Учебная находка, не подтверждённый дефект приложения».
+               Это входящее обращение: решение о реализации принимает человек, ты его не принимаешь.
+            6. Финал: запиши ${{ env.REPORT_DIR }}/conclusion.md (на русском): режим, адрес, итог («находок нет», «нет данных»
+               или список находок), для каждой находки ключ, номер задачи и что сделано (создана, уже была, комментарий).
+          claude_args: |
+            --model claude-sonnet-5-5
+            --max-turns 30
+
+      # Проверка без модели: один ключ находки не должен жить в двух issue. Страховка от сбоя агента
+      - name: Check no duplicate findings
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue list --label audit --state all --limit 200 --json number,body \
+            --jq '[.[] | {n: .number, key: (.body | capture("<!-- audit-finding: (?<k>[^ ]+) -->").k? // empty)}] | group_by(.key) | map({key: .[0].key, issues: map(.n)})' \
+            > "$REPORT_DIR/findings.json"
+          cat "$REPORT_DIR/findings.json"
+          dups=$(jq '[.[] | select(.issues | length > 1)] | length' "$REPORT_DIR/findings.json")
+          if [ "$dups" -gt 0 ]; then
+            echo "::error::Один ключ находки встречается в нескольких issue: дубли"
+            jq -r '.[] | select(.issues | length > 1) | "\(.key): \(.issues | map("#\(.)") | join(", "))"' "$REPORT_DIR/findings.json"
+            exit 1
+          fi
+
+      # Вывод агента виден в сводке прогона, а не только внутри артефакта
+      - name: Publish conclusion
+        if: always()
+        run: |
+          {
+            echo "## Регулярный аудит: ${MODE}"
+            echo
+            echo "Адрес: ${APP_URL:-—} · статус данных: $(cat "$REPORT_DIR/status.txt" 2> /dev/null || echo н/д)"
+            echo
+            if [ -f "$REPORT_DIR/conclusion.md" ]; then
+              cat "$REPORT_DIR/conclusion.md"
+            else
+              echo "Вывод агента не записан (conclusion.md отсутствует): смотри лог шага агента."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Исходные данные: срок хранения ограничен, поэтому в issue главная ссылка на прогон
+      - name: Upload audit data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audit-${{ github.run_id }}
+          path: audit-reports/
+          retention-days: 90
