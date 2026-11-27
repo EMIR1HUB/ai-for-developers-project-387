@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.1](https://github.com/EMIR1HUB/ai-for-developers-project-387/compare/v0.5.0...v0.5.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* поднять контраст календаря слотов до WCAG AA ([a01bb43](https://github.com/EMIR1HUB/ai-for-developers-project-387/commit/a01bb4392292b6cbedf70a196bbdef310a00b1c7)), closes [#28](https://github.com/EMIR1HUB/ai-for-developers-project-387/issues/28)
+* поднять контраст текста до WCAG AA через тему Mantine ([99a7be8](https://github.com/EMIR1HUB/ai-for-developers-project-387/commit/99a7be8b57afca98e972acb174cbd788e773eb59))
+* поднять контраст текста до WCAG AA через тему Mantine ([521d0bb](https://github.com/EMIR1HUB/ai-for-developers-project-387/commit/521d0bbba81416cecfa5d4d177379caaff55a25f)), closes [#28](https://github.com/EMIR1HUB/ai-for-developers-project-387/issues/28)
+
 ## [0.5.0](https://github.com/EMIR1HUB/ai-for-developers-project-387/compare/v0.4.0...v0.5.0) (2026-11-27)
 
 
